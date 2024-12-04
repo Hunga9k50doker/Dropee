@@ -144,8 +144,7 @@ class DropeeAPIClient {
 
     this.log("Token not found or expired, logging in...", "warning");
     const loginResult = await this.login(initData);
-
-    if (loginResult.success) {
+    if (loginResult.success && loginResult?.token) {
       this.saveToken(userId, loginResult.token);
       return loginResult.token;
     }
@@ -817,6 +816,55 @@ class DropeeAPIClient {
     return;
   }
 
+  async handleAds(token, data) {
+    let configResult = await this.getConfig(token);
+    if (!configResult.success || !data?.activities) {
+      this.log(`Unable to get configuration: ${configResult.error}`, "error");
+      return;
+    }
+    let ads = configResult.data.config.game.ads;
+    const { doubleOfflineProfit, others } = ads;
+    let { watchAdForSpin, watchAdForDoublePrize, watchAdInterstitial, watchAdForDoubleOfflineProfit } = data.activities;
+    let timesWatchedAds = watchAdForSpin + watchAdForDoublePrize + watchAdInterstitial;
+
+    while (timesWatchedAds < others.maxPerDay && watchAdForSpin < 10) {
+      this.log(`Waiting 15 seconds for claim spin to be available ads ${timesWatchedAds}`);
+      await sleep(15);
+      await this.claimAds(token, "extra-spin-by-ad");
+      timesWatchedAds++;
+      watchAdForSpin++;
+    }
+
+    if (watchAdForDoubleOfflineProfit < doubleOfflineProfit.maxPerDay) {
+      this.log(`Waiting 15 seconds for claim double profit offline to be available.`);
+      await sleep(15);
+      await this.claimAds(token, "multiply-offline-profit-for-ad");
+    }
+
+    return;
+  }
+
+  async claimAds(token, endpoint = "extra-spin-by-ad") {
+    const url = `${this.baseUrl}/actions/${endpoint}`;
+
+    const headers = {
+      ...this.headers,
+      Authorization: `Bearer ${token}`,
+    };
+
+    try {
+      const response = await axios.post(url, {}, { headers });
+      if (response.status === 200) {
+        this.log(`Claimed ${endpoint === "extra-spin-by-ad" ? "spin ads" : "double profit offline"} successfully`, "success");
+        return { success: true, data: response.data };
+      } else {
+        return { success: false, error: response.data.message };
+      }
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
   async listFriend(token) {
     const url = `${this.baseUrl}/friends-v2`;
     const headers = {
@@ -987,6 +1035,10 @@ class DropeeAPIClient {
               }
             } else {
               this.log("Already checked in today!", "warning");
+            }
+
+            if (settings.AUTO_ADS) {
+              await this.handleAds(token, syncResult.data);
             }
 
             if (settings.AUTO_SPIN) {

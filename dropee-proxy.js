@@ -976,6 +976,56 @@ class DropeeAPIClient {
       return { success: false };
     }
   }
+
+  async handleAds(token, data) {
+    let configResult = await this.getConfig(token);
+    if (!configResult.success || !data?.activities) {
+      this.log(`Unable to get configuration: ${configResult.error}`, "error");
+      return;
+    }
+    let ads = configResult.data.config.game.ads;
+    const { doubleOfflineProfit, others } = ads;
+    let { watchAdForSpin, watchAdForDoublePrize, watchAdInterstitial, watchAdForDoubleOfflineProfit } = data.activities;
+    let timesWatchedAds = watchAdForSpin + watchAdForDoublePrize + watchAdInterstitial;
+
+    while (timesWatchedAds < others.maxPerDay && watchAdForSpin < 10) {
+      this.log(`Waiting 15 seconds for claim spin to be available ads ${timesWatchedAds}`);
+      await sleep(15);
+      await this.claimAds(token, "extra-spin-by-ad");
+      timesWatchedAds++;
+      watchAdForSpin++;
+    }
+
+    if (watchAdForDoubleOfflineProfit < doubleOfflineProfit.maxPerDay) {
+      this.log(`Waiting 15 seconds for claim double profit offline to be available.`);
+      await sleep(15);
+      await this.claimAds(token, "multiply-offline-profit-for-ad");
+    }
+
+    return;
+  }
+
+  async claimAds(token, endpoint = "extra-spin-by-ad") {
+    const url = `${this.baseUrl}/actions/${endpoint}`;
+
+    const headers = {
+      ...this.headers,
+      Authorization: `Bearer ${token}`,
+    };
+
+    try {
+      const response = await this.axiosRequest("post", url, {}, headers);
+      if (response.status === 200) {
+        this.log(`Claimed ${endpoint === "extra-spin-by-ad" ? "spin ads" : "double profit offline"} successfully`, "success");
+        return { success: true, data: response.data };
+      } else {
+        return { success: false, error: response.data.message };
+      }
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
   async runAccount() {
     const i = this.accountIndex;
     const initData = this.queryId;
@@ -1054,6 +1104,10 @@ class DropeeAPIClient {
           }
         } else {
           this.log("Already checked in today!", "warning");
+        }
+
+        if (settings.AUTO_ADS) {
+          await this.handleAds(token, syncResult.data);
         }
 
         if (settings.AUTO_SPIN) {
@@ -1135,9 +1189,7 @@ async function main() {
   }
   let maxThreads = settings.MAX_THEADS;
 
-  queryIds.map((val, i) => new DropeeAPIClient(val, i, proxies[i]).createUserAgent());
-
-  sleep(1);
+  await sleep(1);
   while (true) {
     let currentIndex = 0;
     const errors = [];
@@ -1159,13 +1211,13 @@ async function main() {
             worker.on("message", (message) => {
               if (message.error) {
                 errors.push(`Tài khoản ${message.accountIndex}: ${message.error}`);
+                console.log(`Tài khoản ${message.accountIndex}: ${message.error}`.yellow);
               }
-              // console.log(`Tài khoản ${message.accountIndex}: ${message.error}`);
               resolve();
             });
             worker.on("error", (error) => {
               errors.push(`Lỗi worker cho tài khoản ${currentIndex}: ${error.message}`);
-              // console.log(`Lỗi worker cho tài khoản ${currentIndex}: ${error.message}`);
+              console.log(`Lỗi worker cho tài khoản ${currentIndex}: ${error.message}`.yellow);
               resolve();
             });
             worker.on("exit", (code) => {
