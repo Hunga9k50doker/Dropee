@@ -354,11 +354,9 @@ class DropeeAPIClient {
 
     const today = new Date().toISOString().split("T")[0];
     const lastCheckinDate = new Date(lastCheckin);
-    const nextDay = new Date(lastCheckinDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const nextDayString = nextDay.toISOString().split("T")[0];
+    const lastCheckinString = lastCheckinDate.toISOString().split("T")[0];
 
-    return today === nextDayString;
+    return today !== lastCheckinString;
   }
 
   async getFortuneWheelState(token) {
@@ -431,7 +429,7 @@ class DropeeAPIClient {
 
         this.log(`Spin successful! Received: ${prizeMsg}`, "success");
 
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       } else {
         this.log(`Spin failed: ${spinResult.error}`, "error");
       }
@@ -593,19 +591,23 @@ class DropeeAPIClient {
     }
   }
 
+  checkCountDown(cooldownUntil) {
+    if (cooldownUntil > 0) {
+      const now = Math.floor(Date.now() / 1000);
+      const secondsLeft = cooldownUntil - now;
+      if (secondsLeft > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async purchaseUpgrade(token, upgrade) {
     const { id, cooldown, cooldownUntil } = upgrade;
     const upgradeId = id;
 
-    if (cooldown > 0 && cooldownUntil > 0) {
-      const now = Math.floor(Date.now() / 1000);
-      const secondsLeft = cooldownUntil - now;
-      if (secondsLeft > 0) {
-        const hours = Math.floor(secondsLeft / 3600);
-        const minutes = Math.floor((secondsLeft % 3600) / 60);
-        const seconds = secondsLeft % 60;
-        return { success: false, error: `This card need wait ${hours} hours ${minutes} minutes ${seconds} seconds to continue upgrade...` };
-      }
+    if (cooldown > 0 && this.checkCountDown(cooldownUntil)) {
+      return;
     }
 
     const url = `${this.baseUrl}/actions/upgrade`;
@@ -634,9 +636,15 @@ class DropeeAPIClient {
         this.log(`Unable to get configuration: ${configResult.error}`, "error");
         return;
       }
-
       let upgrades = configResult.data.config.upgrades
-        .filter((upgrade) => upgrade.price <= settings.MAX_UPGRADE_PRICE && upgrade.price <= availableCoins && (!upgrade.expiresOn || upgrade.expiresOn > Math.floor(Date.now() / 1000)))
+        .filter(
+          (upgrade) =>
+            upgrade.price <= settings.MAX_UPGRADE_PRICE &&
+            !this.checkCountDown(upgrade?.cooldownUntil) &&
+            upgrade.price <= availableCoins &&
+            (!upgrade.expiresOn || upgrade.expiresOn > Math.floor(Date.now() / 1000))
+        )
+
         .map((upgrade) => ({
           ...upgrade,
           roi: upgrade.profitDelta / upgrade.price,
@@ -665,6 +673,9 @@ class DropeeAPIClient {
         } else {
           this.log(`Upgrade ${upgrade.name} failed: ${purchaseResult.error}`, "warning");
         }
+      }
+      if (settings.AUTO_UPGRADE_MAX) {
+        await this.handleUpgrades(token, availableCoins);
       }
     } catch (error) {
       this.log(`Error processing upgrades: ${error.message}`, "error");
@@ -696,7 +707,13 @@ class DropeeAPIClient {
       }
 
       let upgrades = configResult.data.config.upgrades
-        .filter((upgrade) => upgrade.price <= settings.MAX_UPGRADE_PRICE && upgrade.price <= availableCoins && (!upgrade.expiresOn || upgrade.expiresOn > Math.floor(Date.now() / 1000)))
+        .filter(
+          (upgrade) =>
+            upgrade.price <= settings.MAX_UPGRADE_PRICE &&
+            !this.checkCountDown(upgrade?.cooldownUntil) &&
+            upgrade.price <= availableCoins &&
+            (!upgrade.expiresOn || upgrade.expiresOn > Math.floor(Date.now() / 1000))
+        )
         .map((upgrade) => ({
           ...upgrade,
           roi: upgrade.profitDelta / upgrade.price,

@@ -481,7 +481,7 @@ class DropeeAPIClient {
 
         this.log(`Spin successful! Received: ${prizeMsg}`, "success");
 
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       } else {
         this.log(`Spin failed: ${spinResult.error}`, "error");
       }
@@ -637,19 +637,23 @@ class DropeeAPIClient {
     }
   }
 
+  checkCountDown(cooldownUntil) {
+    if (cooldownUntil > 0) {
+      const now = Math.floor(Date.now() / 1000);
+      const secondsLeft = cooldownUntil - now;
+      if (secondsLeft > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async purchaseUpgrade(token, upgrade) {
     const { id, cooldown, cooldownUntil } = upgrade;
     const upgradeId = id;
 
-    if (cooldown > 0 && cooldownUntil > 0) {
-      const now = Math.floor(Date.now() / 1000);
-      const secondsLeft = cooldownUntil - now;
-      if (secondsLeft > 0) {
-        const hours = Math.floor(secondsLeft / 3600);
-        const minutes = Math.floor((secondsLeft % 3600) / 60);
-        const seconds = secondsLeft % 60;
-        return { success: false, error: `This card need wait ${hours} hours ${minutes} minutes ${seconds} seconds to continue upgrade...` };
-      }
+    if (cooldown > 0 && this.checkCountDown(cooldownUntil)) {
+      return;
     }
 
     const url = `${this.baseUrl}/actions/upgrade`;
@@ -679,7 +683,13 @@ class DropeeAPIClient {
       }
 
       let upgrades = configResult.data.config.upgrades
-        .filter((upgrade) => upgrade.price <= settings.MAX_UPGRADE_PRICE && upgrade.price <= availableCoins && (!upgrade.expiresOn || upgrade.expiresOn > Math.floor(Date.now() / 1000)))
+        .filter(
+          (upgrade) =>
+            upgrade.price <= settings.MAX_UPGRADE_PRICE &&
+            !this.checkCountDown(upgrade?.cooldownUntil) &&
+            upgrade.price <= availableCoins &&
+            (!upgrade.expiresOn || upgrade.expiresOn > Math.floor(Date.now() / 1000))
+        )
         .map((upgrade) => ({
           ...upgrade,
           roi: upgrade.profitDelta / upgrade.price,
@@ -708,6 +718,9 @@ class DropeeAPIClient {
         } else {
           this.log(`Upgrade ${upgrade.name} failed: ${purchaseResult.error}`, "warning");
         }
+      }
+      if (settings.AUTO_UPGRADE_MAX) {
+        await this.handleUpgrades(token, availableCoins);
       }
     } catch (error) {
       this.log(`Error processing upgrades: ${error.message}`, "error");
@@ -739,7 +752,13 @@ class DropeeAPIClient {
       }
 
       let upgrades = configResult.data.config.upgrades
-        .filter((upgrade) => upgrade.price <= settings.MAX_UPGRADE_PRICE && upgrade.price <= availableCoins && (!upgrade.expiresOn || upgrade.expiresOn > Math.floor(Date.now() / 1000)))
+        .filter(
+          (upgrade) =>
+            upgrade.price <= settings.MAX_UPGRADE_PRICE &&
+            !this.checkCountDown(upgrade?.cooldownUntil) &&
+            upgrade.price <= availableCoins &&
+            (!upgrade.expiresOn || upgrade.expiresOn > Math.floor(Date.now() / 1000))
+        )
         .map((upgrade) => ({
           ...upgrade,
           roi: upgrade.profitDelta / upgrade.price,
@@ -1173,6 +1192,10 @@ async function runWorker(workerData) {
     });
   } catch (error) {
     parentPort.postMessage({ accountIndex, error: error.message });
+  } finally {
+    if (!isMainThread) {
+      parentPort.postMessage("taskComplete");
+    }
   }
 }
 
@@ -1206,29 +1229,27 @@ async function main() {
           },
         });
 
+        // start=========
         workerPromises.push(
           new Promise((resolve) => {
             worker.on("message", (message) => {
-              if (message.error) {
-                errors.push(`Tài khoản ${message.accountIndex}: ${message.error}`);
-                console.log(`Tài khoản ${message.accountIndex}: ${message.error}`.yellow);
+              if (message === "taskComplete") {
+                worker.terminate();
               }
               resolve();
             });
             worker.on("error", (error) => {
-              errors.push(`Lỗi worker cho tài khoản ${currentIndex}: ${error.message}`);
-              console.log(`Lỗi worker cho tài khoản ${currentIndex}: ${error.message}`.yellow);
+              console.log(`worker error with account ${currentIndex}: ${error.message}`);
+              worker.terminate();
               resolve();
             });
             worker.on("exit", (code) => {
-              if (code !== 0) {
-                errors.push(`Worker cho tài khoản ${currentIndex} thoát với mã: ${code}`);
-              }
+              worker.terminate();
               resolve();
             });
           })
         );
-
+        // =====end=======
         currentIndex++;
       }
 

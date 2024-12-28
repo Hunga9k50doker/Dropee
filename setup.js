@@ -12,7 +12,6 @@ class DropeeAPIClient {
     this.headers = headers;
     this.today = new Date();
     this.tokenFile = path.join(__dirname, "token.json");
-    this.loadTokens();
     this.queryId = queryId;
     this.accountIndex = accountIndex;
     this.proxy = proxy;
@@ -83,6 +82,6 @@ class DropeeAPIClient {
   }
 
   queryIds.map((val, i) => new DropeeAPIClient(val, i, proxies[i]).createUserAgent());
-  console.log("Setup successfully!, Run again to start bot".magenta);
+  console.log(`Created user agent ${queryIds.length} accounts successfully!, Run again to start bot...`.magenta);
   process.exit(0);
 })();
